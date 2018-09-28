@@ -1,0 +1,12 @@
+Writing the image to a SD-card and booting up your prongle you should perform the following steps:
+
+1. Change bluetooth host name in /etc/machine-info
+2. reboot (or restart bluetooth services)
+3. Pair your android device with the prongle:
+	- sudo bluetoothctl
+	- > discoverable on
+	- > pairable on
+	- > agent on
+	- > default-agent
+	- Scan bluetooth devices from your android device and pair with the name you defined in step 1.
+x
