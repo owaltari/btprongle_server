@@ -1,16 +1,15 @@
 import os, time
 import pickle
+import logging
 from threading import Thread, Event
-
 import Queue
-#from Queue import Queue
 from scapy.all import *
 
 # This file is designed to be imported in btprongle_server.py, but can
 # be executed by itself for developement and debugging purposes.
 
 test_q = Queue.Queue()
-stop_e = Event()
+#stop_e = Event()
 
 # globals
 interface = "mon0" # FIXTHIS: This comes from the main program as an attribute
@@ -53,54 +52,86 @@ class Frame():
 
     
 class WiFiListener(Thread):
-    def __init__(self, q, interface, stop_e):
+    def __init__(self, s, q, interface):
         Thread.__init__(self)
+        self.name = "WiFiListener"
+        self.state = s
         self.downstream_q = q
         self.iface = interface
-        self.stop = stop_e
         
     def callback(self, pkt):
         #print pkt.summary()
+        logging.debug("WiFiListener caught this:")
         pkt.show()
         hexdump(pkt)
+
         try:
-            msg = pkt.wepdata[:-4]
-            #TODO: sanity check input and possibly unpickle
-            self.downstream_q.put(pickle.loads(msg))
-        except Exception:
+            if not pkt.wepdata:
+                return
+
+            msg = str(pickle.loads(pkt.wepdata))
+            #TODO: sanity check and add logic
+            self.downstream_q.put(msg)
+            logging.debug("msg (%s) was put into downstream queue", msg)
+
+        except Exception as e:
+            logging.debug(e)
             pass
         
         return
-        
+
+    
     def run(self):
+        logging.debug("started")
+
         sniff(filter="ether host 11:11:11:11:11:11",
               iface=self.iface,
               prn=self.callback,
               #lfilter=lambda x: x.type==0 and x.subtype==4,
-              stop_filter=lambda p: self.stop.isSet(),
+              stop_filter=lambda p: not self.state['connected'],
+              #stop_filter=lambda p: self.stop.isSet(),
               store=0)
-        print "Sniffer stopped."
-        
+        logging.debug("stopped")
 
+        
+    def terminate(self):
+        logging.debug("graceful termination of WiFiListener requested")    
+        # This is a workaround to terminate sniff. We generate a dummy frame
+        # that is caught by sniff leading it to trigger stop_filter.
+
+        stopf = Frame("Stop frame")
+        p = stopf.compose()
+        sendp(p, iface=interface)
+        
+        
 
 class WiFiDispatcher(Thread):
-    def __init__(self, q, interface):
+    def __init__(self, s, q, interface):
         Thread.__init__(self)
-        self.iface = interface
+        self.name = "WiFiDispatcher"
+        self.state = s
         self.upstream_q = q
-        self.stop = False
+        self.iface = interface
+
         
     def run(self):
-        while True:
-            msg = self.upstream_q.get()
-             
-            f = Frame("attributes here")
-            f.payload = pickle.dumps(msg)
-            packet = f.compose()
+        logging.debug("started")
+        while self.state['connected']:
+            try:
+                msg = self.upstream_q.get(True, 5)
+
+            except Queue.Empty:
+                pass
+
+            else:
+                f = Frame("attributes here")
+                f.payload = pickle.dumps(msg)
+                packet = f.compose()
             
-            packet.show()
-            hexdump(packet)
-            sendp(packet, iface=interface)
+                packet.show()
+                hexdump(packet)
+                sendp(packet, iface=interface)
+        logging.debug("stopped")
             
             
         
@@ -116,27 +147,34 @@ class Dot11EltRates(Packet):
 
 
 def main():
+
+    logging.basicConfig(level=logging.DEBUG, format='%(relativeCreated)6d %(threadName)s: %(message)s')
+
     print "This is the WiFi module for BTprongle server."
-
-    sniffer = WiFiListener(test_q, interface, stop_e)
-
-    sniffer.start()
+    
+    #sniffer = WiFiListener(test_q, interface, stop_e)
+    #sniffer.start()
 
     while True:
+
         try:
-            cmd = raw_input("> ")
+            msg = raw_input("> ")
+            # TODO: implement attribute control. As of now, all input goes as
+            #       payload in a frame with default parameters.
+
+            f = Frame("attributes go here")
+            f.payload = pickle.dumps(msg)
+            packet = f.compose()
+            
+            packet.show()
+            hexdump(packet)
+
+            sendp(packet, iface=interface)
+            #sendp(packet, loop=1, inter=1.0, iface=interface)
+            logging.debug("frame sent")
+
         except KeyboardInterrupt:
-            stop_e.set()
             break
-
-    sniffer.join()
-    
-
-
-    #f = Frame("attributes here")
-    #packet = f.compose()
-    #packet.show()
-    #sendp(packet, loop=1, inter=1.0, iface=interface)
 
     
    

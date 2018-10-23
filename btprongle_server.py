@@ -1,7 +1,8 @@
-import os, time
+import os, time, select
 import opp80211
-from threading import Thread, Event
-from Queue import Queue
+import logging
+from threading import Thread #, Event
+import Queue
 from bluetooth import *
 
 
@@ -10,11 +11,11 @@ server_sock = BluetoothSocket(RFCOMM)
 server_sock.bind(("", PORT_ANY))
 server_sock.listen(1)
 
-connection = Event()
-stop_e = Event()
+#connection = Event()
+#stop_e = Event()
 
-upstream = Queue()
-downstream = Queue()
+upstream = Queue.Queue()
+downstream = Queue.Queue()
 
 port = server_sock.getsockname()[1]
 
@@ -29,96 +30,107 @@ advertise_service(server_sock, "BTProngle",
 
 
 class BluetoothListener(Thread):
-    def __init__(self, q, sock):
+    def __init__(self, s, q, sock):
         Thread.__init__(self)
+        self.name = "BluetoothListener"
+        self.state = s
         self.socket = sock
         self.upstream_q = q
 
-        
+        self.socket.setblocking(0)
+
+    
     def run(self): 
 
-        while connection.isSet():
-            try:
-                
-	        data = self.socket.recv(1024)
-                if len(data) == 0:
-                    print "len(data) == 0 ; break"
-                    # TODO: appropriate thread cleanup
-                    break
+        logging.debug("started")
+        
+        while self.state['connected']:
+            #logging.debug("recv select loop")
+            ready = select.select([self.socket], [], [], 5)
 
-                # This is where WiFiDispatch should be called
-                print "received [%s]" % data
-                self.upstream_q.put(data)
-                
-            except IOError:
-                print "except"
-	        break # or pass? Find out why and how often IOError occurs
-    
-            except KeyboardInterrupt:
-            	print "disconnected"
-                self.socket.close()
-                break
-            
-        if connection.isSet():
-            connection.clear()
+            if ready[0]:
+                try:
+                    data = self.socket.recv(1024)
+                    if len(data) == 0:
+                        logging.debug("Empty socket read (EOF)")
+                        break
+
+                except IOError:
+                    # FIXTHIS: Rotating the BTProngle app between landscape and
+                    #          portrait triggers an IOError on rfcomm read.
+                    #          Not sure how to fix. Might even be intentional.
+                    logging.debug("IOError while reading Bluetooth socket")
+                    pass
+
+                else: 
+                    logging.debug("Upstream data received")
+                    self.upstream_q.put(data)
+
+        if self.state['connected']:
+            self.state['connected'] = False
+        
+        logging.debug("stopped")
+
 
 class BluetoothDispatcher(Thread):
-    def __init__(self, q, sock):
+    def __init__(self, s, q, sock):
         Thread.__init__(self)
-        self.socket = sock
+        self.name = "BluetoothDispatcher"
+        self.state = s
         self.downstream_q = q
+        self.socket = sock
+
 
     def run(self):
-        while True:
-            msg = self.downstream_q.get()
-            self.socket.send(msg)
-            print "downstream queue: "+msg
-            self.downstream_q.task_done()
-            
-            
-            
-"""            
-class TextInput(Thread):
-    def __init__(self, s):
-        Thread.__init__(self)
-        self.sock = s
+        logging.debug("started")
 
-        
-    def run(self):
-        while connection.locked():
+        while self.state['connected']:
+            #msg = self.downstream_q.get()
+
             try:
-                msg = raw_input("> ")
-                self.sock.send(msg)
-            except IOError:
-                break
+                msg = self.downstream_q.get(True, 1)
+                logging.debug("found msg in downstream queue")
+            except Queue.Empty:
+                # Handle empty queue here
+                pass
             
-            except KeyboardInterrupt:
-            	print "disconnected"
-                self.sock.close()
-	        #server_sock.close()
-	        print "all done"
-                break
-        connection.release()
-"""
-        
+            else:
+                self.socket.send(msg)
+                print "downstream queue: "+msg
+                self.downstream_q.task_done()
+
+                
+        logging.debug("stopped")
+            
+            
+                    
 def main():
 
-    global connection
+    state = {'running': True,
+             'connected': False}
+    
+    logging.basicConfig(level=logging.DEBUG, format='%(relativeCreated)6d %(threadName)s: %(message)s')
+    
+    while state['running']:          
 
+        logging.debug("Waiting for connection on RFCOMM channel %d" % port)
     
-    
-    while True:          
-        print "Waiting for connection on RFCOMM channel %d" % port
-    
-        client_sock, client_info = server_sock.accept()
-        connection.set()
-        print "Accepted connection from ", client_info
+        try:
+            client_sock, client_info = server_sock.accept()
+        except KeyboardInterrupt:
+            break
+            
+        state['connected'] = True
 
-        wifi_out = opp80211.WiFiDispatcher(upstream, wifi_iface)
-        bluetooth_in = BluetoothListener(upstream, client_sock)
+        logging.debug("Accepted connection from %s", client_info[0])
+
+        # Upstream threads
+        wifi_out = opp80211.WiFiDispatcher(state, upstream, wifi_iface)
+        bluetooth_in = BluetoothListener(state, upstream, client_sock)
         
-        wifi_in = opp80211.WiFiListener(downstream, wifi_iface, stop_e)
-        bluetooth_out = BluetoothDispatcher(downstream, client_sock)
+        # Downstream threads
+        wifi_in = opp80211.WiFiListener(state, downstream, wifi_iface)
+        bluetooth_out = BluetoothDispatcher(state, downstream, client_sock)
 
         
         # upstream
@@ -130,31 +142,46 @@ def main():
         bluetooth_out.start()
         
         
-        while connection.isSet():
+        while state['connected']:
+        #while connection.isSet():
 
-            
             # print list(msgq.queue)
             try:
                 msg = raw_input("> ")
                 client_sock.send(msg)
             except IOError:
+                logging.debug("IOError caught")
                 break
             
             except KeyboardInterrupt:
-            	print "disconnected"
-                client_sock.close()
-                stop_e.set()
-	        #server_sock.close()
+                logging.debug("KeyboardInterrupt")
+                state['connected'] = False
+                state['running'] = False
+                #client_sock.close()
+                #stop_e.set()
                 break
-        if connection.isSet():
-            connection.clear()
-        
-        #sniffer.terminate()
-        bluetooth_in.join()
-        #thread_out.join()
-        
-    #listener()
 
+
+
+        if state['connected']:
+            state['connected'] = False
+            
+        #if connection.isSet():
+        #    connection.clear()
+        
+        server_sock.close()
+                            
+        # Upstream
+        wifi_out.join()
+        bluetooth_in.join()
+
+        # Downstream
+        wifi_in.terminate()
+        wifi_in.join() ## This is a tricky one because of scapys sniff stop_filter
+        bluetooth_out.join()
+        
+        
+    logging.debug("Bye.")
     
 if __name__ == "__main__":
     main()
