@@ -9,7 +9,7 @@ from scapy.all import *
 # be executed by itself for developement and debugging purposes.
 
 test_q = Queue.Queue()
-#stop_e = Event()
+random.seed()
 
 # globals
 interface = "mon0" # FIXTHIS: This comes from the main program as an attribute
@@ -32,22 +32,28 @@ class Frame():
         self.ra = "11:11:11:11:11:11" # receiver
         self.null_addr = "00:00:00:00:00:00"
 
-        self.payload = ""
-                
+        self.data = None
+        
         #print "opp80211"
         
 
     def compose(self):
 
+        picklewrapper = pickle.dumps(self.data)
+
         # add mock wep
-        data = "".join(['\xff\xff\xff\x00', self.payload, '\x00\x00\x00\x00'])
+        wepdata = "".join(['\xff\xff\xff\x00', picklewrapper, '\x00\x00\x00\x00'])
+        
+        if len(wepdata) < 1465:
+            logging.debug("Payload too long for one frame! FIXTHIS")
+            pass # Check if frame is too long
         
         packet = RadioTap()/Dot11(type=self._type, subtype=self._subtype,
                                   FCfield=self._FCfield, SC=self._SC,
                                   addr1=self.sa,
                                   addr2=self.da,
                                   addr3=self.ra,
-                                  addr4=self.null_addr) / Raw(load=data)
+                                  addr4=self.null_addr) / Raw(load=wepdata)
         return packet
 
     
@@ -125,12 +131,15 @@ class WiFiDispatcher(Thread):
 
             else:
                 f = Frame("attributes here")
-                f.payload = pickle.dumps(msg)
+
+                f.data = msg
                 packet = f.compose()
             
                 packet.show()
                 hexdump(packet)
                 sendp(packet, iface=interface)
+
+                
         logging.debug("stopped")
             
             

@@ -60,6 +60,7 @@ class BluetoothListener(Thread):
                     #          portrait triggers an IOError on rfcomm read.
                     #          Not sure how to fix. Might even be intentional.
                     logging.debug("IOError while reading Bluetooth socket")
+                    self.state['connected'] = False
                     pass
 
                 else: 
