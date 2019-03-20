@@ -21,25 +21,27 @@ fi
 echo "PRETTY_HOSTNAME=$NAME" > /etc/machine-info
 
 
-
-exit
-
 # Install required packages
-DEPENDS=("tcpdump" "bluetooth" "bluez" "python-bluez" "python-scapy" "bluez-test-scripts")
-apt-get install `echo "${DEPENDS[*]}"`
+apt-get update
+DEPENDS=("git" "gawk" "tcpdump" "bluetooth" "bluez" "python-bluez" "python-scapy" "bluez-test-scripts")
+apt-get install -y `echo "${DEPENDS[*]}"`
 
 # Remove unnecessary and unfavourable packages
 REMOVES=("wpasupplicant")
-apt-get remove --purge `echo "${REMOVES[*]}"`
+apt-get remove -y --purge `echo "${REMOVES[*]}"`
 
 
 
 # Make bluetoothd start with --compat
 ### FIXTHIS: needs escape
-# sed -i .bak 's/ExecStart=/usr/lib/bluetooth/bluetoothd/ExecStart=/usr/lib/bluetooth/bluetoothd --compat/' /etc/systemd/system/dbus-org.bluez.service
+sed --in-place=.bak 's/\/bluetoothd$/\/bluetoothd --compat/' /etc/systemd/system/dbus-org.bluez.service
+
 
 systemctl daemon-reload
 systemctl restart bluetooth
+
+# Add serial port profile for Bluetooth
+sdptool add SP
 
 # Bluetooth pairing
 hciconfig hci0 piscan

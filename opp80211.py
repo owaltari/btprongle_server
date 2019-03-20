@@ -1,5 +1,5 @@
 import os, time
-import pickle
+import pickle, hashlib
 import logging
 from threading import Thread, Event
 import Queue
@@ -8,11 +8,7 @@ from scapy.all import *
 # This file is designed to be imported in btprongle_server.py, but can
 # be executed by itself for developement and debugging purposes.
 
-test_q = Queue.Queue()
 random.seed()
-
-# globals
-interface = "mon0" # FIXTHIS: This comes from the main program as an attribute
 seq = 1
 
 class Frame():
@@ -33,10 +29,8 @@ class Frame():
         self.null_addr = "00:00:00:00:00:00"
 
         self.data = None
-        
-        #print "opp80211"
-        
 
+        
     def compose(self):
 
         picklewrapper = pickle.dumps(self.data)
@@ -44,7 +38,7 @@ class Frame():
         # add mock wep
         wepdata = "".join(['\xff\xff\xff\x00', picklewrapper, '\x00\x00\x00\x00'])
         
-        if len(wepdata) < 1465:
+        if len(wepdata) > 1465:
             logging.debug("Payload too long for one frame! FIXTHIS")
             pass # Check if frame is too long
         
@@ -58,28 +52,33 @@ class Frame():
 
     
 class WiFiListener(Thread):
-    def __init__(self, s, q, interface):
+    def __init__(self, s):
         Thread.__init__(self)
         self.name = "WiFiListener"
-        self.state = s
-        self.downstream_q = q
-        self.iface = interface
+        self.state = s.state
+        self.downstream = s.downstream
+        self.iface = s.wifi_iface_in
         
     def callback(self, pkt):
+        ts = int(round(time.time() * 1000))
         #print pkt.summary()
+        print "\n\n"
         logging.debug("WiFiListener caught this:")
-        pkt.show()
+        ls(pkt)
+        print " **** "
         hexdump(pkt)
-
+        
         try:
             if not pkt.wepdata:
                 return
 
             msg = str(pickle.loads(pkt.wepdata))
             #TODO: sanity check and add logic
-            self.downstream_q.put(msg)
-            logging.debug("msg (%s) was put into downstream queue", msg)
-
+            self.downstream.put([msg, ts])
+            #logging.debug("msg (%s) was put into downstream queue", msg)
+            logging.debug("Incoming frame payload: %s", msg)
+            logging.debug("Frame md5: %s", str(hashlib.md5(bytes(msg)).hexdigest()))
+            
         except Exception as e:
             logging.debug(e)
             pass
@@ -88,14 +87,12 @@ class WiFiListener(Thread):
 
     
     def run(self):
-        logging.debug("started")
+        logging.debug("sniffer started")
 
-        sniff(filter="ether host 11:11:11:11:11:11",
+        sniff(filter="ether dst 11:11:11:11:11:11",
               iface=self.iface,
               prn=self.callback,
-              #lfilter=lambda x: x.type==0 and x.subtype==4,
               stop_filter=lambda p: not self.state['connected'],
-              #stop_filter=lambda p: self.stop.isSet(),
               store=0)
         logging.debug("stopped")
 
@@ -107,63 +104,50 @@ class WiFiListener(Thread):
 
         stopf = Frame("Stop frame")
         p = stopf.compose()
-        sendp(p, iface=interface)
+        sendp(p, iface=self.iface)
         
         
 
 class WiFiDispatcher(Thread):
-    def __init__(self, s, q, interface):
+    def __init__(self, s):
         Thread.__init__(self)
+        self.session = s
         self.name = "WiFiDispatcher"
-        self.state = s
-        self.upstream_q = q
-        self.iface = interface
+        self.state = s.state
+        self.upstream = s.upstream
+        self.iface = s.wifi_iface_out
 
         
     def run(self):
         logging.debug("started")
         while self.state['connected']:
             try:
-                msg = self.upstream_q.get(True, 5)
+                msg, ts1 = self.upstream.get(True, 5)
 
             except Queue.Empty:
                 pass
 
             else:
                 f = Frame("attributes here")
-
+                logging.debug("Outgoing frame payload: %s", msg)
                 f.data = msg
                 packet = f.compose()
             
                 packet.show()
                 hexdump(packet)
-                sendp(packet, iface=interface)
-
-                
+                sendp(packet, iface=self.iface)
+                delta = int(round(time.time() * 1000)) - ts1
+                self.session.upstream_proc_time.append(delta)
+                logging.debug("Upstream frame processed in %d ms", delta)                
         logging.debug("stopped")
             
             
-        
-"""        
-class Dot11EltRates(Packet):
-    name = "802.11 Rates Information Element"
-    # Our Test STA supports the rates 6, 9, 12, 18, 24, 36, 48 and 54 Mbps
-    supported_rates = [0x0c, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6c]
-    fields_desc = [ByteField("ID", 1), ByteField("len", len(supported_rates))]
-    for index, rate in enumerate(supported_rates):
-        fields_desc.append(ByteField("supported_rate{0}".format(index + 1), rate))
-"""
-
-
 def main():
 
     logging.basicConfig(level=logging.DEBUG, format='%(relativeCreated)6d %(threadName)s: %(message)s')
 
     print "This is the WiFi module for BTprongle server."
     
-    #sniffer = WiFiListener(test_q, interface, stop_e)
-    #sniffer.start()
-
     while True:
 
         try:
@@ -178,7 +162,7 @@ def main():
             packet.show()
             hexdump(packet)
 
-            sendp(packet, iface=interface)
+            sendp(packet, iface="mon1")
             #sendp(packet, loop=1, inter=1.0, iface=interface)
             logging.debug("frame sent")
 
