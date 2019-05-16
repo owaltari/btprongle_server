@@ -1,7 +1,9 @@
 import os, time, select, ast
+import hashlib
 import opp80211
 import logging
 from threading import Thread #, Event
+from collections import deque
 import Queue
 from bluetooth import *
 
@@ -18,6 +20,10 @@ class Session():
         self.upstream = Queue.Queue()
         self.downstream = Queue.Queue()
 
+        # iface_in picks up what iface_out sends out, so we use backlog to ignore frames which
+        #   we sent out. Backlog maxlen=3 is likely enough. 
+        self.backlog = deque([], maxlen=3)
+        
         self.upstream_proc_time = []
         self.downstream_proc_time = []
                 
@@ -25,10 +31,21 @@ class Session():
         self.client_sock = None
         self.client_info = None
 
+        self.debug = False
+        self.logging = True
+        self.logfile = "session.log"
+                
+
+    def write_log_entry(self, key, value):
+        with open(self.logfile, "a+") as file:
+            file.write(str(time.time())+"\t"+str(key)+"\t"+str(value)+"\n")
+            file.close
+
         
 class BluetoothListener(Thread):
     def __init__(self, s):
         Thread.__init__(self)
+        self.session = s
         self.name = "BluetoothListener"
         self.state = s.state
         self.socket = s.client_sock
@@ -50,6 +67,7 @@ class BluetoothListener(Thread):
             ready = select.select([self.socket], [], [], 5)
 
             if ready[0]:
+                ts = int(round(time.time() * 1000))
                 try:
                     data = self.socket.recv(1024)
                     if len(data) == 0:
@@ -65,16 +83,20 @@ class BluetoothListener(Thread):
                     pass
 
                 else: 
-                    ts = int(round(time.time() * 1000))
                     logging.debug("Upstream data received")
                     
                     frame = ast.literal_eval(data)
                     if frame[0] == 201:
                         # If message ID == 201: This is a echo request to the prongle.
                         # Put the message downstream
-                        logging.debug("Local echo request received: %s", frame[0])
+                        logging.debug("Local echo request (%s): put downstream right away", frame[0])
                         self.downstream.put([data, ts])
+
                     else:
+                        # Normal upstream forwarding behavior
+                        checksum = str(hashlib.md5(bytes(data)).hexdigest())
+                        logging.debug("checksum going out: %s", checksum)
+                        self.session.backlog.append(checksum)
                         self.upstream.put([data, ts])
 
         if self.state['connected']:
@@ -97,11 +119,10 @@ class BluetoothDispatcher(Thread):
         logging.debug("started")
 
         while self.state['connected']:
-            #msg = self.downstream_q.get()
 
             try:
                 msg, ts1 = self.downstream.get(True, 1)
-                logging.debug("found msg in downstream queue")
+                #logging.debug("found msg in downstream queue")
             except Queue.Empty:
                 # Handle empty queue here
                 pass
@@ -111,6 +132,7 @@ class BluetoothDispatcher(Thread):
                 delta = int(round(time.time() * 1000)) - ts1
                 self.session.downstream_proc_time.append(delta)
                 logging.debug("Downstream frame processed in %d ms", delta)
+                self.session.write_log_entry("downstream_proc_t", delta)
                 self.downstream.task_done()
                 
                 
@@ -119,9 +141,6 @@ class BluetoothDispatcher(Thread):
             
                     
 def main():
-
-    #state = {'running': True,
-    #         'connected': False}
 
     session = Session()
 

@@ -54,6 +54,7 @@ class Frame():
 class WiFiListener(Thread):
     def __init__(self, s):
         Thread.__init__(self)
+        self.session = s
         self.name = "WiFiListener"
         self.state = s.state
         self.downstream = s.downstream
@@ -61,24 +62,32 @@ class WiFiListener(Thread):
         
     def callback(self, pkt):
         ts = int(round(time.time() * 1000))
-        #print pkt.summary()
-        print "\n\n"
-        logging.debug("WiFiListener caught this:")
-        ls(pkt)
-        print " **** "
-        hexdump(pkt)
+        logging.debug("Downstream data received")
+
+        if self.session.debug:
+            print "\n\n"
+            logging.debug("WiFiListener caught this:")
+            ls(pkt)
+            print " **** "
+            hexdump(pkt)
         
         try:
             if not pkt.wepdata:
                 return
 
             msg = str(pickle.loads(pkt.wepdata))
-            #TODO: sanity check and add logic
-            self.downstream.put([msg, ts])
-            #logging.debug("msg (%s) was put into downstream queue", msg)
-            logging.debug("Incoming frame payload: %s", msg)
-            logging.debug("Frame md5: %s", str(hashlib.md5(bytes(msg)).hexdigest()))
-            
+
+            # md5sum hash is used for weeding out duplicates
+            checksum = str(hashlib.md5(bytes(msg)).hexdigest())
+            logging.debug("check if this checksum is in backlog: %s", checksum)
+            if checksum in self.session.backlog:
+                # Do not put the frame downstream since it has been seen already
+                logging.debug("!! checksum is in backlog !!")
+            else:
+                logging.debug("Incoming frame payload: %s", msg)
+                self.downstream.put([msg, ts])
+            logging.debug("current backlog: %s", self.session.backlog)
+                
         except Exception as e:
             logging.debug(e)
             pass
@@ -133,12 +142,14 @@ class WiFiDispatcher(Thread):
                 f.data = msg
                 packet = f.compose()
             
-                packet.show()
-                hexdump(packet)
+                if self.session.debug:
+                    packet.show()
+                    hexdump(packet)
                 sendp(packet, iface=self.iface)
                 delta = int(round(time.time() * 1000)) - ts1
                 self.session.upstream_proc_time.append(delta)
-                logging.debug("Upstream frame processed in %d ms", delta)                
+                self.session.write_log_entry("upstream_proc_t", delta)
+                logging.debug("Upstream frame processed in %d ms\n", delta)
         logging.debug("stopped")
             
             
