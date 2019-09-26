@@ -34,8 +34,8 @@ apt-get remove -y --purge `echo "${REMOVES[*]}"`
 
 # Make bluetoothd start with --compat
 ### FIXTHIS: needs escape
-sed --in-place=.bak 's/\/bluetoothd$/\/bluetoothd --compat/' /etc/systemd/system/dbus-org.bluez.service
-
+#sed --in-place=.bak 's/\/bluetoothd$/\/bluetoothd --compat/' /etc/systemd/system/dbus-org.bluez.service
+sed --in-place=.bak 's/\/bluetoothd$/\/bluetoothd --compat/' /lib/systemd/system/bluetooth.service
 
 systemctl daemon-reload
 systemctl restart bluetooth
