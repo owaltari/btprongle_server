@@ -46,3 +46,5 @@ sdptool add SP
 # Bluetooth pairing
 hciconfig hci0 piscan
 ### FIXTHIS: simple-agent from bluez testscripts
+
+sed --in-place=.bak 's/exit 0/\/home\/pi\/btprongle_server\/launch.sh\n\nexit 0/' /etc/rc.local
