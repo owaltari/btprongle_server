@@ -19,11 +19,11 @@ else
 fi
 
 echo "PRETTY_HOSTNAME=$NAME" > /etc/machine-info
-
+echo "$NAME" > /etc/hostname
 
 # Install required packages
 apt-get update
-DEPENDS=("git" "gawk" "tcpdump" "bluetooth" "bluez" "python-bluez" "python-scapy" "bluez-test-scripts")
+DEPENDS=("git" "gawk" "tcpdump" "screen" "bluetooth" "bluez" "python-bluez" "python-scapy" "bluez-test-scripts")
 apt-get install -y `echo "${DEPENDS[*]}"`
 
 # Remove unnecessary and unfavourable packages
@@ -33,7 +33,7 @@ apt-get remove -y --purge `echo "${REMOVES[*]}"`
 
 
 # Make bluetoothd start with --compat
-### FIXTHIS: needs escape
+### FIXTHIS: There was some path confusion regarding where the service description is. Recent raspbians seem to use the latter one.
 #sed --in-place=.bak 's/\/bluetoothd$/\/bluetoothd --compat/' /etc/systemd/system/dbus-org.bluez.service
 sed --in-place=.bak 's/\/bluetoothd$/\/bluetoothd --compat/' /lib/systemd/system/bluetooth.service
 

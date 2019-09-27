@@ -1,5 +1,5 @@
 import os, time
-import pickle, hashlib
+import pickle, zlib, hashlib
 import logging
 from threading import Thread, Event
 import Queue
@@ -62,7 +62,8 @@ class WiFiListener(Thread):
         
     def callback(self, pkt):
         ts = int(round(time.time() * 1000))
-        logging.debug("Downstream data received")
+        # Downstream data received
+        #logging.debug("Downstream data received")
 
         if self.session.debug:
             print "\n\n"
@@ -77,14 +78,18 @@ class WiFiListener(Thread):
 
             msg = str(pickle.loads(pkt.wepdata))
 
-            # md5sum hash is used for weeding out duplicates
-            checksum = str(hashlib.md5(bytes(msg)).hexdigest())
-            logging.debug("check if this checksum is in backlog: %s", checksum)
+            # CRC32 is used for weeding out duplicates. This used to be md5,
+            #   but on the raspberries CRC32 is a whole lot faster.
+            checksum = zlib.crc32(bytes(msg)) & 0xffffffff
+            # check if this checksum is in backlog
+            #logging.debug("check if this checksum is in backlog: %s", checksum)
             if checksum in self.session.backlog:
                 # Do not put the frame downstream since it has been seen already
-                logging.debug("!! checksum is in backlog !!")
+                #logging.debug("!! checksum is in backlog !!")
+                pass
             else:
                 logging.debug("Incoming frame payload: %s", msg)
+                self.session.backlog.append(checksum)
                 self.downstream.put([msg, ts])
             logging.debug("current backlog: %s", self.session.backlog)
                 
@@ -147,6 +152,7 @@ class WiFiDispatcher(Thread):
                     hexdump(packet)
                 sendp(packet, iface=self.iface)
                 delta = int(round(time.time() * 1000)) - ts1
+                sendp(packet, iface=self.iface)
                 self.session.upstream_proc_time.append(delta)
                 self.session.write_log_entry("upstream_proc_t", delta)
                 logging.debug("Upstream frame processed in %d ms\n", delta)

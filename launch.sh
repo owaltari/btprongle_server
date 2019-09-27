@@ -8,8 +8,10 @@ ifconfig wlan0 down
 ifconfig mon0 up
 ifconfig mon1 up
 sleep 1
-iwconfig mon0 channel 11
-iwconfig mon1 channel 11
+iwconfig mon0 channel 1
+iwconfig mon1 channel 1
 
-python /home/pi/btprongle_server/btprongle_server.py &
+#python /home/pi/btprongle_server/btprongle_server.py &
 
+screen -dmS btprongle
+screen -S btprongle -X stuff 'python /home/pi/btprongle_server/btprongle_server.py\nbash\n'

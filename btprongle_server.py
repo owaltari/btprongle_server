@@ -1,5 +1,5 @@
 import os, time, select, ast
-import hashlib
+import zlib, hashlib
 import opp80211
 import logging
 from threading import Thread #, Event
@@ -21,8 +21,8 @@ class Session():
         self.downstream = Queue.Queue()
 
         # iface_in picks up what iface_out sends out, so we use backlog to ignore frames which
-        #   we sent out. Backlog maxlen=3 is likely enough. 
-        self.backlog = deque([], maxlen=3)
+        #   we sent out. Backlog maxlen=5 is likely enough. 
+        self.backlog = deque([], maxlen=5)
         
         self.upstream_proc_time = []
         self.downstream_proc_time = []
@@ -94,7 +94,8 @@ class BluetoothListener(Thread):
 
                     else:
                         # Normal upstream forwarding behavior
-                        checksum = str(hashlib.md5(bytes(data)).hexdigest())
+                        #checksum = str(hashlib.md5(bytes(data)).hexdigest())
+                        checksum = zlib.crc32(bytes(data)) & 0xffffffff
                         logging.debug("checksum going out: %s", checksum)
                         self.session.backlog.append(checksum)
                         self.upstream.put([data, ts])
